@@ -19,9 +19,13 @@ class ZWaveMonitor:
         self.log_file_path = None
 
         # --- GUI Setup ---
+        # Top Frame for both Config and Controller RF Status
+        top_container = tk.Frame(root)
+        top_container.pack(padx=10, pady=5, fill="x")
+
         # 1. Configuration Frame
-        setup_frame = ttk.LabelFrame(root, text="Broker Configuration")
-        setup_frame.pack(padx=10, pady=5, fill="x")
+        setup_frame = ttk.LabelFrame(top_container, text="Broker Configuration")
+        setup_frame.pack(side="left", padx=(0, 10), fill="both", expand=True)
 
         # IP and Port
         ttk.Label(setup_frame, text="Broker IP:").grid(row=0, column=0, sticky="w", padx=5)
@@ -65,6 +69,22 @@ class ZWaveMonitor:
 
         self.btn_connect = ttk.Button(setup_frame, text="Connect", command=self.start_mqtt)
         self.btn_connect.grid(row=2, column=3, padx=5, pady=5)
+
+        # 1.1 Controller RF Status Frame (Top Right)
+        rf_frame = ttk.LabelFrame(top_container, text="Controller RF Status")
+        rf_frame.pack(side="right", fill="both")
+
+        self.rf_labels = {}
+        rf_fields = [
+            ("RX", "RX: 0"), ("TX", "TX: 0"),
+            ("DroppedRX", "DroppedRX: 0"), ("DroppedTX", "DroppedTX: 0"),
+            ("RSSIChannel0", "Ch0: N/A"), ("RSSIChannel1", "Ch1: N/A"),
+            ("RSSIChannel2", "Ch2: N/A"), ("RSSIChannel3", "Ch3: N/A")
+        ]
+        for i, (key, text) in enumerate(rf_fields):
+            lbl = ttk.Label(rf_frame, text=text, width=15)
+            lbl.grid(row=i//2, column=i%2, padx=5, pady=2, sticky="w")
+            self.rf_labels[key] = lbl
 
         # 2. Node Table Frame
         table_frame = ttk.LabelFrame(root, text="Z-Wave Nodes Statistics")
@@ -285,19 +305,24 @@ class ZWaveMonitor:
                 self.log("📋 已更新節點統計 (自 statistics_updated)")
                 return
             if topic.startswith("zwave/_EVENTS/ZWAVE_GATEWAY-Mosquitto/controller/statistics_updated") and isinstance(payload, dict):
-                controoler_data = payload.get("data")
-                rssi_data = controoler_data[0].get("backgroundRSSI")
-                extracted_controler_data = {
-                    "messageRX": controoler_data[0].get("messageRX"),
-                    "messageTX": controoler_data[0].get("messageTX"),
-                    "messageDroppedRX": controoler_data[0].get("messageDroppedRX"),
-                    "messagesDroppedTX": controoler_data[0].get("messagesDroppedTX"),
-                    "rssiChannel_0":controoler_data[0].get("channel0").toString(),
-                    "rssiChannel_1":controoler_data[0].get("channel1").toString(),
-                    "rssiChannel_2":controoler_data[0].get("channel2").toString(),
-                    "rssiChannel_3":controoler_data[0].get("channel3").toString(),
-                }
-                self.log("Mosquitto/node/statistics_updated 收到:"+topic +"["+payload_raw+"]")
+                controller_data = payload.get("data")
+                if isinstance(controller_data, list) and len(controller_data) > 0:
+                    stats = controller_data[0]
+                    # Get background RSSI if available
+                    bg_rssi = stats.get("backgroundRSSI", {})
+                    extracted_rf_data = {
+                        "RX": stats.get("messagesRX", 0),
+                        "TX": stats.get("messagesTX", 0),
+                        "DroppedRX": stats.get("messagesDroppedRX", 0),
+                        "DroppedTX": stats.get("messagesDroppedTX", 0),
+                        "RSSIChannel0": bg_rssi.get("channel0", "N/A"),
+                        "RSSIChannel1": bg_rssi.get("channel1", "N/A"),
+                        "RSSIChannel2": bg_rssi.get("channel2", "N/A"),
+                        "RSSIChannel3": bg_rssi.get("channel3", "N/A"),
+                    }
+                    self.root.after(0, lambda: self.update_rf_status(extracted_rf_data))
+                self.log("📋 已更新控制器統計 (自 controller/statistics_updated)")
+                return
             # Log other general messages
             if not topic.startswith("zwave/_CLIENT/REPLY/api"):
                 self.log("已收到訊息:"+topic+"["+payload_raw+"]")
@@ -340,6 +365,22 @@ class ZWaveMonitor:
             data = [item for item in self.available_topics if value in item.lower()]
             self.entry_topic['values'] = data
         self.entry_topic.event_generate('<Down>')
+
+    def update_rf_status(self, data):
+        """Update the Controller RF Status labels."""
+        mapping = {
+            "RX": f"RX: {data.get('RX')}",
+            "TX": f"TX: {data.get('TX')}",
+            "DroppedRX": f"DroppedRX: {data.get('DroppedRX')}",
+            "DroppedTX": f"DroppedTX: {data.get('DroppedTX')}",
+            "RSSIChannel0": f"Ch0: {data.get('RSSIChannel0')} dBm",
+            "RSSIChannel1": f"Ch1: {data.get('RSSIChannel1')} dBm",
+            "RSSIChannel2": f"Ch2: {data.get('RSSIChannel2')} dBm",
+            "RSSIChannel3": f"Ch3: {data.get('RSSIChannel3')} dBm"
+        }
+        for key, text in mapping.items():
+            if key in self.rf_labels:
+                self.rf_labels[key].configure(text=text)
 
     def update_node_data(self, node_id, new_data):
         node_id = str(node_id)
